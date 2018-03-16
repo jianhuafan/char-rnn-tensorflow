@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.contrib import rnn
 from tensorflow.contrib import legacy_seq2seq
+import cirRnnCell
 
 import numpy as np
 
@@ -17,15 +18,16 @@ class Model():
         elif args.model == 'gru':
             cell_fn = rnn.GRUCell
         elif args.model == 'lstm':
-            cell_fn = rnn.BasicLSTMCell
+            cell_fn = cirRnnCell.CirBasicLSTMCell
         elif args.model == 'nas':
             cell_fn = rnn.NASCell
         else:
             raise Exception("model type not supported: {}".format(args.model))
 
         cells = []
+        B = args.block_size
         for _ in range(args.num_layers):
-            cell = cell_fn(args.rnn_size)
+            cell = cell_fn(args.rnn_size, B)
             if training and (args.output_keep_prob < 1.0 or args.input_keep_prob < 1.0):
                 cell = rnn.DropoutWrapper(cell,
                                           input_keep_prob=args.input_keep_prob,

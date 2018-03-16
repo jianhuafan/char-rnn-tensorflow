@@ -8,12 +8,13 @@ from six.moves import cPickle
 
 from utils import TextLoader
 from model import Model
+from datetime import datetime
 
 
 def main():
     parser = argparse.ArgumentParser(
                         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--data_dir', type=str, default='data/tinyshakespeare',
+    parser.add_argument('--data_dir', type=str, default='data/ptb',
                         help='data directory containing input.txt')
     parser.add_argument('--save_dir', type=str, default='save',
                         help='directory to store checkpointed models')
@@ -27,6 +28,10 @@ def main():
                         help='rnn, gru, lstm, or nas')
     parser.add_argument('--batch_size', type=int, default=50,
                         help='minibatch size')
+    parser.add_argument('--block_size', type=int, default=2,
+                        help='block_size if use cir-rnn')
+    parser.add_argument('--train_flag', type=bool, default=True,
+                        help='train or test, if false, test')
     parser.add_argument('--seq_length', type=int, default=50,
                         help='RNN sequence length')
     parser.add_argument('--num_epochs', type=int, default=50,
@@ -56,8 +61,12 @@ def main():
 
 
 def train(args):
-    data_loader = TextLoader(args.data_dir, args.batch_size, args.seq_length)
+
+    start_time = datetime.now()
+
+    data_loader = TextLoader(args.data_dir, args.batch_size, args.seq_length, args.train_flag)
     args.vocab_size = data_loader.vocab_size
+    args.save_dir += '_{}'.format(args.block_size)
 
     # check compatibility if training is continued from previously saved model
     if args.init_from is not None:
@@ -90,6 +99,7 @@ def train(args):
         cPickle.dump((data_loader.chars, data_loader.vocab), f)
 
     model = Model(args)
+    block_size = args.block_size
 
     with tf.Session() as sess:
         # instrument for tensorboard
@@ -125,6 +135,11 @@ def train(args):
                       .format(e * data_loader.num_batches + b,
                               args.num_epochs * data_loader.num_batches,
                               e, train_loss, end - start))
+                with open('result/cir_result_block_size_{}_{}.txt'.format(block_size, args.train_flag), 'a') as f:
+                    print("{}/{} (epoch {}), train_loss = {:.3f}, time/batch = {:.3f}"
+                          .format(e * data_loader.num_batches + b,
+                                  args.num_epochs * data_loader.num_batches,
+                                  e, train_loss, end - start), file=f)
                 if (e * data_loader.num_batches + b) % args.save_every == 0\
                         or (e == args.num_epochs-1 and
                             b == data_loader.num_batches-1):
@@ -133,6 +148,13 @@ def train(args):
                     saver.save(sess, checkpoint_path,
                                global_step=e * data_loader.num_batches + b)
                     print("model saved to {}".format(checkpoint_path))
+                # optim_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+                # print([v for v in optim_vars]) #=> prints lists of vars created
+
+
+    print("Run time: {}".format(datetime.now() - start_time))
+    with open('result/cir_result_block_size_{}_{}.txt'.format(block_size, args.train_flag), 'a') as f:
+        print("Run time: {}".format(datetime.now() - start_time), file=f)
 
 
 if __name__ == '__main__':
