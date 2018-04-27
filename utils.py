@@ -6,15 +6,17 @@ import numpy as np
 
 
 class TextLoader():
-    def __init__(self, data_dir, batch_size, seq_length, train_flag, encoding='utf-8'):
+    def __init__(self, data_dir, batch_size, seq_length, test_flag, encoding='utf-8'):
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.encoding = encoding
 
-        if train_flag:
+        if not test_flag:
+            print("loading training data")
             input_file = os.path.join(data_dir, "ptb_train.txt")
         else:
+            print("loading test data")
             input_file = os.path.join(data_dir, "ptb_test.txt")
         vocab_file = os.path.join(data_dir, "vocab.pkl")
         tensor_file = os.path.join(data_dir, "data.npy")

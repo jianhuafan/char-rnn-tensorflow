@@ -4,11 +4,13 @@ import tensorflow as tf
 import argparse
 import time
 import os
+import numpy as np
 from six.moves import cPickle
 
 from utils import TextLoader
 from model import Model
 from datetime import datetime
+
 
 
 def main():
@@ -24,14 +26,22 @@ def main():
                         help='size of RNN hidden state')
     parser.add_argument('--num_layers', type=int, default=2,
                         help='number of layers in the RNN')
-    parser.add_argument('--model', type=str, default='lstm',
+    parser.add_argument('--model', type=str, default='cirlstm',
                         help='rnn, gru, lstm, or nas')
     parser.add_argument('--batch_size', type=int, default=50,
                         help='minibatch size')
     parser.add_argument('--block_size', type=int, default=2,
                         help='block_size if use cir-rnn')
-    parser.add_argument('--train_flag', type=bool, default=True,
-                        help='train or test, if false, test')
+    parser.add_argument('--w_bit', type=int, default=32,
+                        help='bitwidth of weight')
+    parser.add_argument('--f_bit', type=int, default=32,
+                        help='bitwidth of state')
+    parser.add_argument('--transform', type=str, default='Fourier',
+                        help='type of transform')
+    parser.add_argument('--quant', type=str, default='normal',
+                        help='type of quantization, binary, ternary')
+    parser.add_argument('--test_flag', type=bool, default=False,
+                        help='train or test, if false, train')
     parser.add_argument('--seq_length', type=int, default=50,
                         help='RNN sequence length')
     parser.add_argument('--num_epochs', type=int, default=50,
@@ -64,9 +74,10 @@ def train(args):
 
     start_time = datetime.now()
 
-    data_loader = TextLoader(args.data_dir, args.batch_size, args.seq_length, args.train_flag)
+    data_loader = TextLoader(args.data_dir, args.batch_size, args.seq_length, args.test_flag)
     args.vocab_size = data_loader.vocab_size
-    args.save_dir += '_{}'.format(args.block_size)
+    args.save_dir += '_bit_{}'.format(args.w_bit)
+    result_file_path = 'result/bit_{}_{}.txt'.format(args.w_bit, args.test_flag)
 
     # check compatibility if training is continued from previously saved model
     if args.init_from is not None:
@@ -103,10 +114,16 @@ def train(args):
 
     with tf.Session() as sess:
         # instrument for tensorboard
+
+        # tf.contrib.quantize.create_training_graph(quant_delay=2000000)
+        # tf.contrib.quantize.create_eval_graph()
+
         summaries = tf.summary.merge_all()
         writer = tf.summary.FileWriter(
                 os.path.join(args.log_dir, time.strftime("%Y-%m-%d-%H-%M-%S")))
         writer.add_graph(sess.graph)
+
+
 
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver(tf.global_variables())
@@ -118,6 +135,7 @@ def train(args):
                                args.learning_rate * (args.decay_rate ** e)))
             data_loader.reset_batch_pointer()
             state = sess.run(model.initial_state)
+            loss_list = []
             for b in range(data_loader.num_batches):
                 start = time.time()
                 x, y = data_loader.next_batch()
@@ -135,11 +153,7 @@ def train(args):
                       .format(e * data_loader.num_batches + b,
                               args.num_epochs * data_loader.num_batches,
                               e, train_loss, end - start))
-                with open('result/cir_result_block_size_{}_{}.txt'.format(block_size, args.train_flag), 'a') as f:
-                    print("{}/{} (epoch {}), train_loss = {:.3f}, time/batch = {:.3f}"
-                          .format(e * data_loader.num_batches + b,
-                                  args.num_epochs * data_loader.num_batches,
-                                  e, train_loss, end - start), file=f)
+                loss_list.append(train_loss)
                 if (e * data_loader.num_batches + b) % args.save_every == 0\
                         or (e == args.num_epochs-1 and
                             b == data_loader.num_batches-1):
@@ -150,10 +164,15 @@ def train(args):
                     print("model saved to {}".format(checkpoint_path))
                 # optim_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
                 # print([v for v in optim_vars]) #=> prints lists of vars created
+                size = np.sum([np.prod(v.get_shape().as_list()) for v in tf.trainable_variables()])
+
+            print("mean_loss for this epoch:{:.3f}".format(sum(loss_list) / float(len(loss_list))))
+            with open(result_file_path, 'a') as f:
+                print("mean_loss for this epoch:{:.3f}".format(sum(loss_list) / float(len(loss_list))), file=f)
 
 
     print("Run time: {}".format(datetime.now() - start_time))
-    with open('result/cir_result_block_size_{}_{}.txt'.format(block_size, args.train_flag), 'a') as f:
+    with open(result_file_path, 'a') as f:
         print("Run time: {}".format(datetime.now() - start_time), file=f)
 
 

@@ -1,7 +1,10 @@
 import tensorflow as tf
 from tensorflow.contrib import rnn
 from tensorflow.contrib import legacy_seq2seq
+from quant.regularization import *
 import cirRnnCell
+import bit_utils
+
 
 import numpy as np
 
@@ -17,8 +20,14 @@ class Model():
             cell_fn = rnn.BasicRNNCell
         elif args.model == 'gru':
             cell_fn = rnn.GRUCell
-        elif args.model == 'lstm':
-            cell_fn = cirRnnCell.CirBasicLSTMCell
+        elif args.model == "lstm":
+            if args.quant == "bit":
+                cell_fn = cirRnnCell.BitLSTMCell
+            else:
+                cell_fn = cirRnnCell.QuantizedBasicLSTMCell
+        elif args.model == 'cirlstm':
+            cell_fn = cirRnnCell.HadamardBasicLSTMCell
+            # cell_fn = rnn.BasicLSTMCell
         elif args.model == 'nas':
             cell_fn = rnn.NASCell
         else:
@@ -27,7 +36,13 @@ class Model():
         cells = []
         B = args.block_size
         for _ in range(args.num_layers):
-            cell = cell_fn(args.rnn_size, B)
+            if args.model == "cirlstm":
+                cell = cell_fn(args.rnn_size, B, args.transform, args.quant, args.w_bit, args.f_bit)
+            else:
+                if args.quant == "bit":
+                    cell = cell_fn(args.rnn_size, args.w_bit, args.f_bit)
+                else:
+                    cell = cell_fn(args.rnn_size, args.quant)
             if training and (args.output_keep_prob < 1.0 or args.input_keep_prob < 1.0):
                 cell = rnn.DropoutWrapper(cell,
                                           input_keep_prob=args.input_keep_prob,
@@ -41,14 +56,28 @@ class Model():
         self.targets = tf.placeholder(
             tf.int32, [args.batch_size, args.seq_length])
         self.initial_state = cell.zero_state(args.batch_size, tf.float32)
+        self._initial_state = bit_utils.round_bit(
+            tf.sigmoid(self.initial_state), bit=args.f_bit)
 
         with tf.variable_scope('rnnlm'):
             softmax_w = tf.get_variable("softmax_w",
                                         [args.rnn_size, args.vocab_size])
+            if args.quant == 'bit':
+                softmax_w = bit_utils.quantize_w(tf.tanh(softmax_w), bit=args.w_bit)
+            elif args.quant == 'binary':
+                softmax_w = binarize(softmax_w)
             softmax_b = tf.get_variable("softmax_b", [args.vocab_size])
 
+        # if args.quant == "binary":
+        #     softmax_w = binarize(softmax_w)
+        # elif args.quant == "ternary":
+        #     softmax_w = ternarize(softmax_w)
         embedding = tf.get_variable("embedding", [args.vocab_size, args.rnn_size])
         inputs = tf.nn.embedding_lookup(embedding, self.input_data)
+        if args.quant == 'bit':
+            inputs = bit_utils.round_bit(tf.nn.relu(inputs), bit=args.f_bit)
+        elif args.quant == 'binary':
+            inputs = binarize(inputs)
 
         # dropout beta testing: double check which one should affect next line
         if training and args.output_keep_prob:
@@ -64,7 +93,6 @@ class Model():
 
         outputs, last_state = legacy_seq2seq.rnn_decoder(inputs, self.initial_state, cell, loop_function=loop if not training else None, scope='rnnlm')
         output = tf.reshape(tf.concat(outputs, 1), [-1, args.rnn_size])
-
 
         self.logits = tf.matmul(output, softmax_w) + softmax_b
         self.probs = tf.nn.softmax(self.logits)
